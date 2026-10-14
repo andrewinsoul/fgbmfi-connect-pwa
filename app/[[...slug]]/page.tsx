@@ -124,6 +124,9 @@ export default function AppPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pageMeta, setPageMeta] = useState<any>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerError, setScannerError] = useState("");
+  const [scannedValue, setScannedValue] = useState("");
 
   const displayName =
     profile?.full_name ||
@@ -223,6 +226,57 @@ export default function AppPage() {
     };
   }, [page]); // page changes trigger a fresh request
 
+  useEffect(() => {
+    if (!scannerOpen) return;
+
+    let scanner: any = null;
+    let cancelled = false;
+
+    async function startScanner() {
+      try {
+        const { Html5Qrcode } = await import("html5-qrcode");
+        if (cancelled) return;
+
+        scanner = new Html5Qrcode("fgbmfi-qr-reader");
+        await (scanner as any).start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 },
+          async (decodedText: string) => {
+            if (cancelled) return;
+            setScannedValue(decodedText);
+            setScannerError("");
+            try {
+              await scanner?.stop();
+            } catch {
+              // The scanner may already have stopped after a successful decode.
+            }
+          },
+          () => {
+            // Ignore per-frame decode misses; these are expected while scanning.
+          },
+        );
+      } catch (e) {
+        if (!cancelled) {
+          setScannerError(
+            e instanceof Error
+              ? e.message
+              : "We couldn't access your camera. Check your browser permissions and try again.",
+          );
+        }
+      }
+    }
+
+    void startScanner();
+    return () => {
+      cancelled = true;
+      if (scanner) {
+        void scanner.stop().catch(() => {}).finally(() => {
+          void scanner?.clear().catch(() => {});
+        });
+      }
+    };
+  }, [scannerOpen]);
+
   async function submitAuth(
     event: FormEvent<HTMLFormElement>,
     mode: "login" | "register",
@@ -239,10 +293,10 @@ export default function AppPage() {
         { method: "POST", body: JSON.stringify(payload) },
       );
       setMember(r.data?.member || null);
-      if (mode === "register") {
-        setNotice(r.data?.message || "Welcome to the fellowship.");
-        go("check-in-success");
-      } else go("home");
+      setScannedValue("");
+      setScannerError("");
+      setScannerOpen(true);
+      go("home");
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "We couldn't complete that request.",
@@ -583,6 +637,80 @@ export default function AppPage() {
 
   return (
     <div className="app-shell">
+      {scannerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qr-scanner-title"
+          className="qr-scanner-backdrop"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "grid",
+            placeItems: "center",
+            padding: 20,
+            background: "rgba(22, 14, 39, 0.72)",
+          }}
+        >
+          <section
+            className="card qr-scanner-card"
+            style={{ width: "min(100%, 460px)", maxHeight: "90dvh", overflowY: "auto" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start" }}>
+              <div>
+                <div className="eyebrow">FELLOWSHIP ATTENDANCE</div>
+                <h2 id="qr-scanner-title">Scan meeting QR code</h2>
+                <p className="muted">Scan the code displayed at your fellowship meeting, or skip for now.</p>
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                aria-label="Close QR scanner"
+                onClick={() => setScannerOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+            {!scannedValue && <div id="fgbmfi-qr-reader" style={{ width: "100%", margin: "16px 0" }} />}
+            {scannerError && <ErrorNote text={`${scannerError} Camera access requires permission and a secure HTTPS connection.`} />}
+            {scannedValue && (
+              <div className="notice success" role="status">
+                QR code detected. QR-based attendance verification is not connected yet, so scanning alone has not recorded your attendance.
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+              {scannedValue && (
+                <button
+                  className="button primary full"
+                  onClick={() => {
+                    setScannerOpen(false);
+                    go("check-in");
+                  }}
+                >
+                  Continue to attendance check-in
+                </button>
+              )}
+              {scannerError && !scannedValue && (
+                <button
+                  className="button secondary full"
+                  onClick={() => {
+                    setScannerError("");
+                    setScannedValue("");
+                    setScannerOpen(false);
+                    window.setTimeout(() => setScannerOpen(true), 100);
+                  }}
+                >
+                  Try camera again
+                </button>
+              )}
+              <button className="button secondary full" onClick={() => setScannerOpen(false)}>
+                Skip for now
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <aside className="sidebar">
         <button className="brand" onClick={() => go("home")}>
           <div className="brand-mark small">

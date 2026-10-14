@@ -1,0 +1,13 @@
+{
+  "name": "FGBMFI Connect",
+  "short_name": "FGBMFI",
+  "description": "Connected in fellowship. Growing in faith.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f7fb",
+  "theme_color": "#32135f",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

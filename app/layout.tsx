@@ -6,7 +6,11 @@ export const metadata: Metadata = {
   description: "Connected in fellowship. Growing in faith.",
   applicationName: "FGBMFI Connect",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, statusBarStyle: "default", title: "FGBMFI Connect" },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "FGBMFI Connect",
+  },
   icons: { icon: "/icon.svg", apple: "/icon.svg" },
 };
 export const viewport: Viewport = {
@@ -15,6 +19,19 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
 };
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}<script dangerouslySetInnerHTML={{__html: `if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {})); }`}} /></body></html>;
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <html lang="en">
+      <body>
+        {children}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {})); }`,
+          }}
+        />
+      </body>
+    </html>
+  );
 }

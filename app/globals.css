@@ -1278,3 +1278,35 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .qr-progress-orbit::before, .qr-progress-orbit::after, .qr-progress-core, .qr-progress-track span { animation-duration: 8s; }
 }
+
+/* Reusable password visibility toggle */
+.password-input-wrapper {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.password-input-wrapper .password-input {
+  padding-right: 4.5rem;
+}
+
+.password-input-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.65rem;
+  transform: translateY(-50%);
+  border: 0;
+  padding: 0.35rem;
+  background: transparent;
+  color: var(--violet);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.password-input-toggle:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

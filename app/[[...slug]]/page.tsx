@@ -4,6 +4,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Input from "@/components/ui/Input";
 
 type Member = {
   id: number;
@@ -46,12 +47,16 @@ async function api<T>(
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
     cache: "no-store",
   });
-  console.log("WATER >>>> ", response)
   const body = await response.json().catch(() => ({}));
-  if (!response.ok)
-    throw new Error(
+
+  if (!response.ok) {
+    const error = new Error(
       body?.error?.message || `Request failed (${response.status})`,
-    );
+    ) as Error & { code?: string };
+
+    error.code = body?.error?.code;
+    throw error;
+  }
   return body;
 }
 function initials(name = "") {
@@ -127,12 +132,14 @@ export default function AppPage() {
   const [notice, setNotice] = useState("");
   const [pageMeta, setPageMeta] = useState<any>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [openScannerAfterAuth, setOpenScannerAfterAuth] = useState(false);
   const [scannerError, setScannerError] = useState("");
-  const [scannedValue, setScannedValue] = useState("");
+  const [, setScannedValue] = useState("");
   const [qrStatus, setQrStatus] = useState<"idle" | "verifying" | "success" | "error">("idle");
   const [qrMessage, setQrMessage] = useState("");
+  const [qrErrorCode, setQrErrorCode] = useState("");
   const qrRequestInFlight = useRef(false);
+  const signupFormRef = useRef<HTMLElement | null>(null);
+  const qrScannerLifecycleRef = useRef<Promise<void>>(Promise.resolve());
 
   const displayName =
     profile?.full_name ||
@@ -180,12 +187,17 @@ export default function AppPage() {
     let cancelled = false;
     async function boot() {
       if (["welcome", "login", "register", "forgot-password"].includes(page)) {
-        // The server-side proxy keeps the auth token in an HttpOnly cookie.
+
         try {
           const r = await api<any>("home");
-          if (!cancelled && r.data?.member && page !== "register") {
+
+          if (!cancelled && r.data?.member) {
             setHome(r.data);
             setMember(r.data.member);
+
+            if (["welcome", "login", "register", "forgot-password"].includes(page)) {
+              router.replace("/home");
+            }
           }
         } catch {
           /* unauthenticated is expected on public pages */
@@ -230,19 +242,8 @@ export default function AppPage() {
     return () => {
       cancelled = true;
     };
-  }, [page]); // page changes trigger a fresh request
+  }, [page]);
 
-
-  // useEffect(() => {
-  //   if (page !== "home" || searchParams.get("scan") !== "1") return;
-
-  //   setScannerError("");
-  //   setScannedValue("");
-  //   setScannerOpen(true);
-
-  //   // Remove the one-time trigger without navigating again.
-  //   window.history.replaceState(null, "", "/home");
-  // }, [page, searchParams]);
 
   const scanRequested = searchParams.get("scan") === "1";
 
@@ -260,70 +261,252 @@ export default function AppPage() {
     setScannedValue("");
     setQrStatus("idle");
     setQrMessage("");
+    setQrErrorCode("");
     qrRequestInFlight.current = false;
     setScannerOpen(true);
 
     window.history.replaceState(null, "", "/home");
   }, [page, scanRequested]);
 
+
   useEffect(() => {
-    if (!scannerOpen) return;
+    console.info("[QR scanner] Effect entered", { scannerOpen });
+
+    if (!scannerOpen) {
+      console.info("[QR scanner] Effect skipped: scanner is closed");
+      return;
+    }
 
     let scanner: any = null;
     let cancelled = false;
+    let startPromise: Promise<void> | null = null;
+    let stopPromise: Promise<void> | null = null;
 
-    async function startScanner() {
+    async function stopScannerSafely(): Promise<void> {
+      if (!scanner) return;
+
+
+      if (stopPromise) {
+        await stopPromise;
+        return;
+      }
+
+      const operation = (async () => {
+
+        if (startPromise) {
+          try {
+            await startPromise;
+          } catch {
+
+          }
+        }
+
+        if (!scanner) return;
+
+
+        const state = scanner.getState();
+
+        if (state !== 2 && state !== 3) {
+          console.info(
+            "[QR scanner] Stop skipped; scanner is not active",
+            { state },
+          );
+          return;
+        }
+
+        try {
+          await scanner.stop();
+          console.info("[QR scanner] Scanner stopped successfully");
+        } catch (error) {
+          const currentState = scanner.getState();
+
+          if (currentState !== 2 && currentState !== 3) {
+            console.info(
+              "[QR scanner] Stop ignored; scanner is already inactive",
+              { currentState },
+            );
+            return;
+          }
+
+
+          throw error;
+        }
+
+      })();
+
+      stopPromise = operation;
+
+      try {
+        await operation;
+      } finally {
+        if (stopPromise === operation) {
+          stopPromise = null;
+        }
+      }
+    }
+
+    async function startScanner(): Promise<void> {
+      console.info("[QR scanner] Initialization started");
+
       try {
         const { Html5Qrcode } = await import("html5-qrcode");
-        if (cancelled) return;
+
+        console.info("[QR scanner] Library loaded", { cancelled });
+
+        if (cancelled) {
+          console.info("[QR scanner] Initialization aborted after cleanup");
+          return;
+        }
+
+
+        await qrScannerLifecycleRef.current;
+
+        if (cancelled) {
+          console.info("[QR scanner] Initialization cancelled before creation");
+          return;
+        }
 
         scanner = new Html5Qrcode("fgbmfi-qr-reader");
-        await (scanner as any).start(
+
+        console.info("[QR scanner] Instance created");
+
+        startPromise = scanner.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 },
+          {
+            fps: 10,
+            qrbox: { width: 240, height: 240 },
+            aspectRatio: 1,
+          },
           async (decodedText: string) => {
-            if (cancelled || qrRequestInFlight.current) return;
+            console.info("[QR scanner] QR decoded", {
+              cancelled,
+              requestInFlight: qrRequestInFlight.current,
+            });
+
+            if (cancelled || qrRequestInFlight.current) {
+              console.warn("[QR scanner] Decoded value ignored", {
+                cancelled,
+                requestInFlight: qrRequestInFlight.current,
+              });
+              return;
+            }
+
             qrRequestInFlight.current = true;
             setScannedValue(decodedText);
             setScannerError("");
             setQrStatus("verifying");
             setQrMessage("Verifying your QR code…");
+            setQrErrorCode("");
+
             try {
-              await scanner?.stop();
-            } catch {
-              // The scanner may already have stopped after a successful decode.
+              console.info("[QR scanner] Stopping scanner after decode");
+              await stopScannerSafely();
+              console.info("[QR scanner] Scanner stopped after decode");
+            } catch (error) {
+              console.error("[QR scanner] Stop after decode failed", error);
+
+
+              if (!cancelled) {
+                setQrStatus("error");
+                setQrMessage(
+                  "We couldn't stop the camera safely. Please try scanning again.",
+                );
+              }
+
+              qrRequestInFlight.current = false;
+              return;
             }
+
+
+            if (cancelled) {
+              qrRequestInFlight.current = false;
+              return;
+            }
+
             try {
+              console.info("[QR scanner] Check-in request started");
+
               const result = await api<any>("attendance/check-in", {
                 method: "POST",
                 body: JSON.stringify({ qr_code: decodedText }),
               });
+
+              if (cancelled) return;
+
               const status = result.data?.status;
+
+              console.info("[QR scanner] Check-in request succeeded", {
+                status,
+              });
+
               setQrStatus("success");
+              setQrErrorCode("");
               setQrMessage(
                 status === "already_checked_in"
                   ? "You're already checked in for this meeting."
-                  : result.data?.message || "Your attendance has been recorded.",
+                  : result.data?.message ||
+                  "Your attendance has been recorded.",
               );
+
               window.setTimeout(() => {
+                if (cancelled) return;
+
                 setScannerOpen(false);
-                go(status === "already_checked_in" ? "already-checked-in" : "check-in-success");
+                go(
+                  status === "already_checked_in"
+                    ? "already-checked-in"
+                    : "check-in-success",
+                );
               }, 900);
-            } catch (e) {
+            } catch (error) {
+              console.error("[QR scanner] Check-in request failed", error);
+
+              if (cancelled) return;
+
               setQrStatus("error");
-              const message = e instanceof Error ? e.message : "We couldn't verify this QR code.";
+
+              const code =
+                error instanceof Error
+                  ? (error as Error & { code?: string }).code
+                  : undefined;
+              setQrErrorCode(code || "");
+
+              const message =
+                code === "invalid_qr_code"
+                  ? "Invalid QR Code. Please scan the official FGBMFI Connect QR code."
+                  : error instanceof Error
+                    ? error.message
+                    : "We couldn't verify this QR code.";
+
               setQrMessage(message);
+            } finally {
+              qrRequestInFlight.current = false;
             }
           },
           () => {
-            // Ignore per-frame decode misses; these are expected while scanning.
+
           },
         );
-      } catch (e) {
+
+        await startPromise;
+
+        console.info("[QR scanner] Camera started successfully");
+
+
+        if (cancelled) {
+          console.info("[QR scanner] Startup completed after cancellation");
+          await stopScannerSafely();
+        }
+      } catch (error) {
+        console.error(
+          "[QR scanner] Initialization or camera start failed",
+          error,
+        );
+
         if (!cancelled) {
           setScannerError(
-            e instanceof Error
-              ? e.message
+            error instanceof Error
+              ? error.message
               : "We couldn't access your camera. Check your browser permissions and try again.",
           );
         }
@@ -331,15 +514,50 @@ export default function AppPage() {
     }
 
     void startScanner();
+
     return () => {
+      console.info("[QR scanner] Effect cleanup started", {
+        hasScanner: Boolean(scanner),
+      });
+
       cancelled = true;
-      if (scanner) {
-        void scanner.stop().catch(() => { }).finally(() => {
-          void scanner?.clear().catch(() => { });
-        });
+
+      if (!scanner) {
+        console.info("[QR scanner] Cleanup deferred or skipped: no scanner instance");
+        return;
       }
+
+
+      const cleanupPromise = (async () => {
+
+        if (startPromise) {
+          try {
+            await startPromise;
+          } catch {
+
+          }
+        }
+
+        try {
+          await stopScannerSafely();
+          console.info("[QR scanner] Cleanup stop completed");
+        } catch (error) {
+          console.warn("[QR scanner] Cleanup stop failed", error);
+        }
+
+
+        try {
+          scanner.clear();
+          console.info("[QR scanner] Cleanup clear completed");
+        } catch (error) {
+          console.warn("[QR scanner] Cleanup clear failed", error);
+        }
+      })();
+
+      qrScannerLifecycleRef.current = cleanupPromise;
     };
   }, [scannerOpen]);
+
 
   async function submitAuth(
     event: FormEvent<HTMLFormElement>,
@@ -359,13 +577,15 @@ export default function AppPage() {
       setMember(r.data?.member || null);
       setScannedValue("");
       setScannerError("");
-      // setOpenScannerAfterAuth(true);
-      // go("home");
       router.push("/home?scan=1");
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "We couldn't complete that request.",
       );
+      signupFormRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
     } finally {
       setBusy(false);
     }
@@ -518,9 +738,10 @@ export default function AppPage() {
               </label>
               <label>
                 Password
-                <input
+                <Input
                   name="password"
                   type="password"
+                  showPasswordToggle
                   autoComplete="current-password"
                   required
                   placeholder="Your password"
@@ -543,7 +764,7 @@ export default function AppPage() {
           </section>
         )}
         {page === "register" && (
-          <section className="auth-card">
+          <section className="auth-card" ref={signupFormRef}>
             <div className="eyebrow">JOIN THE FELLOWSHIP</div>
             <h1>Create your account.</h1>
             <p className="muted">Let's get you connected.</p>
@@ -573,9 +794,10 @@ export default function AppPage() {
               </label>
               <label>
                 Password
-                <input
+                <Input
                   name="password"
                   type="password"
+                  showPasswordToggle
                   minLength={8}
                   autoComplete="new-password"
                   required
@@ -707,7 +929,10 @@ export default function AppPage() {
                 <p className="muted">{qrStatus === "verifying" ? "Please wait while we securely verify the code and record your attendance." : qrStatus === "success" ? qrMessage : qrStatus === "error" ? qrMessage : "Scan the official QR code displayed at your fellowship meeting."}</p>
               </div>
               {qrStatus !== "verifying" && (
-                <button type="button" className="text-button" aria-label="Close QR scanner" onClick={() => setScannerOpen(false)}>✕</button>
+                <button type="button" className="text-button" aria-label="Close QR scanner" onClick={() => {
+                  console.info("[QR scanner] Close icon clicked", { qrStatus, scannerOpen });
+                  setScannerOpen(false);
+                }}>✕</button>
               )}
             </div>
             {qrStatus === "verifying" ? (
@@ -720,7 +945,7 @@ export default function AppPage() {
             ) : qrStatus === "error" ? (
               <div className="qr-result-state qr-error-state" role="alert">
                 <div className="qr-result-icon"><span>!</span></div>
-                <strong>{/invalid_qr_code|official.*qr|not recognised|not recognized/i.test(qrMessage) ? "QR code not recognised" : "Check-in couldn't be completed"}</strong>
+                <strong>{qrErrorCode === "invalid_qr_code" ? "Invalid QR Code" : "Check-in couldn't be completed"}</strong>
                 <p>{qrMessage || "Please scan the official FGBMFI Connect QR code and try again."}</p>
               </div>
             ) : qrStatus === "success" ? (
@@ -738,17 +963,46 @@ export default function AppPage() {
             <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
               {qrStatus === "error" && (
                 <button className="button primary full" onClick={() => {
-                  setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage(""); qrRequestInFlight.current = false;
-                  setScannerOpen(false); window.setTimeout(() => setScannerOpen(true), 100);
+                  console.info("[QR scanner] Scan again clicked", {
+                    scannerOpen,
+                    qrStatus,
+                    hasScannerError: Boolean(scannerError),
+                    requestInFlight: qrRequestInFlight.current,
+                  });
+                  setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage(""); setQrErrorCode(""); qrRequestInFlight.current = false;
+                  setScannerOpen(false);
+                  console.info("[QR scanner] Retry scheduled", { delayMs: 100 });
+                  window.setTimeout(() => {
+                    console.info("[QR scanner] Retry timer fired");
+                    setScannerOpen(true);
+                  }, 100);
                 }}>Scan again</button>
               )}
               {scannerError && qrStatus === "idle" && (
                 <button className="button secondary full" onClick={() => {
+                  console.info("[QR scanner] Try camera again clicked", {
+                    scannerOpen,
+                    qrStatus,
+                    hasScannerError: Boolean(scannerError),
+                    requestInFlight: qrRequestInFlight.current,
+                  });
                   setScannerError(""); setScannedValue(""); qrRequestInFlight.current = false;
-                  setScannerOpen(false); window.setTimeout(() => setScannerOpen(true), 100);
+                  setScannerOpen(false);
+                  console.info("[QR scanner] Camera retry scheduled", { delayMs: 100 });
+                  window.setTimeout(() => {
+                    console.info("[QR scanner] Camera retry timer fired");
+                    setScannerOpen(true);
+                  }, 100);
                 }}>Try camera again</button>
               )}
-              {qrStatus !== "verifying" && <button className="button secondary full" onClick={() => setScannerOpen(false)}>{qrStatus === "success" ? "Close" : "Cancel"}</button>}
+              {qrStatus !== "verifying" && <button className="button secondary full" onClick={() => {
+                console.info("[QR scanner] Cancel/close button clicked", {
+                  scannerOpen,
+                  qrStatus,
+                  hasScannerError: Boolean(scannerError),
+                });
+                setScannerOpen(false);
+              }}>{qrStatus === "success" ? "Close" : "Cancel"}</button>}
             </div>
           </section>
         </div>
@@ -895,6 +1149,7 @@ export default function AppPage() {
                       setScannedValue("");
                       setQrStatus("idle");
                       setQrMessage("");
+                      setQrErrorCode("");
                       qrRequestInFlight.current = false;
                       setScannerOpen(true);
                     }}
@@ -991,7 +1246,7 @@ export default function AppPage() {
                   <button
                     className="button primary full"
                     onClick={() => {
-                      setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage("");
+                      setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage(""); setQrErrorCode("");
                       qrRequestInFlight.current = false; setScannerOpen(true);
                     }}
                   >

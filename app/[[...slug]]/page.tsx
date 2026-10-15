@@ -2,8 +2,8 @@
 /* eslint-disable react/no-unescaped-entities */
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 type Member = {
   id: number;
@@ -46,6 +46,7 @@ async function api<T>(
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
     cache: "no-store",
   });
+  console.log("WATER >>>> ", response)
   const body = await response.json().catch(() => ({}));
   if (!response.ok)
     throw new Error(
@@ -104,6 +105,7 @@ function Loading() {
 
 export default function AppPage() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const page = (pathname || "/").split("/").filter(Boolean)[0] || "welcome";
   const [member, setMember] = useState<Member | null>(null);
@@ -125,8 +127,12 @@ export default function AppPage() {
   const [notice, setNotice] = useState("");
   const [pageMeta, setPageMeta] = useState<any>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [openScannerAfterAuth, setOpenScannerAfterAuth] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const [scannedValue, setScannedValue] = useState("");
+  const [qrStatus, setQrStatus] = useState<"idle" | "verifying" | "success" | "error">("idle");
+  const [qrMessage, setQrMessage] = useState("");
+  const qrRequestInFlight = useRef(false);
 
   const displayName =
     profile?.full_name ||
@@ -226,6 +232,40 @@ export default function AppPage() {
     };
   }, [page]); // page changes trigger a fresh request
 
+
+  // useEffect(() => {
+  //   if (page !== "home" || searchParams.get("scan") !== "1") return;
+
+  //   setScannerError("");
+  //   setScannedValue("");
+  //   setScannerOpen(true);
+
+  //   // Remove the one-time trigger without navigating again.
+  //   window.history.replaceState(null, "", "/home");
+  // }, [page, searchParams]);
+
+  const scanRequested = searchParams.get("scan") === "1";
+
+  useEffect(() => {
+    console.log("[QR scanner] URL trigger", {
+      page,
+      scanRequested,
+    });
+
+    if (page !== "home" || !scanRequested) return;
+
+    console.log("[QR scanner] Opening scanner");
+
+    setScannerError("");
+    setScannedValue("");
+    setQrStatus("idle");
+    setQrMessage("");
+    qrRequestInFlight.current = false;
+    setScannerOpen(true);
+
+    window.history.replaceState(null, "", "/home");
+  }, [page, scanRequested]);
+
   useEffect(() => {
     if (!scannerOpen) return;
 
@@ -242,13 +282,37 @@ export default function AppPage() {
           { facingMode: "environment" },
           { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 },
           async (decodedText: string) => {
-            if (cancelled) return;
+            if (cancelled || qrRequestInFlight.current) return;
+            qrRequestInFlight.current = true;
             setScannedValue(decodedText);
             setScannerError("");
+            setQrStatus("verifying");
+            setQrMessage("Verifying your QR code…");
             try {
               await scanner?.stop();
             } catch {
               // The scanner may already have stopped after a successful decode.
+            }
+            try {
+              const result = await api<any>("attendance/check-in", {
+                method: "POST",
+                body: JSON.stringify({ qr_code: decodedText }),
+              });
+              const status = result.data?.status;
+              setQrStatus("success");
+              setQrMessage(
+                status === "already_checked_in"
+                  ? "You're already checked in for this meeting."
+                  : result.data?.message || "Your attendance has been recorded.",
+              );
+              window.setTimeout(() => {
+                setScannerOpen(false);
+                go(status === "already_checked_in" ? "already-checked-in" : "check-in-success");
+              }, 900);
+            } catch (e) {
+              setQrStatus("error");
+              const message = e instanceof Error ? e.message : "We couldn't verify this QR code.";
+              setQrMessage(message);
             }
           },
           () => {
@@ -270,8 +334,8 @@ export default function AppPage() {
     return () => {
       cancelled = true;
       if (scanner) {
-        void scanner.stop().catch(() => {}).finally(() => {
-          void scanner?.clear().catch(() => {});
+        void scanner.stop().catch(() => { }).finally(() => {
+          void scanner?.clear().catch(() => { });
         });
       }
     };
@@ -295,34 +359,13 @@ export default function AppPage() {
       setMember(r.data?.member || null);
       setScannedValue("");
       setScannerError("");
-      setScannerOpen(true);
-      go("home");
+      // setOpenScannerAfterAuth(true);
+      // go("home");
+      router.push("/home?scan=1");
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "We couldn't complete that request.",
       );
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function checkIn() {
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const r = await api<any>("attendance/check-in", {
-        method: "POST",
-        body: "{}",
-      });
-      const status = r.data?.status;
-      setNotice(r.data?.message || "Your check-in request is complete.");
-      go(
-        status === "already_checked_in"
-          ? "already-checked-in"
-          : "check-in-success",
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Check-in failed.");
     } finally {
       setBusy(false);
     }
@@ -574,8 +617,8 @@ export default function AppPage() {
               </button>
             </form>
             <p className="fineprint">
-              Registration also attempts to record your first check-in; it is
-              only available while check-in is open.
+              You can register at any time. Attendance check-in is available
+              only while a meeting is accepting check-ins.
             </p>
             <p className="auth-switch">
               Already a member?{" "}
@@ -660,53 +703,52 @@ export default function AppPage() {
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start" }}>
               <div>
                 <div className="eyebrow">FELLOWSHIP ATTENDANCE</div>
-                <h2 id="qr-scanner-title">Scan meeting QR code</h2>
-                <p className="muted">Scan the code displayed at your fellowship meeting, or skip for now.</p>
+                <h2 id="qr-scanner-title">{qrStatus === "verifying" ? "Verifying your check-in" : qrStatus === "success" ? "You're all set" : qrStatus === "error" ? "We couldn't verify that code" : "Scan meeting QR code"}</h2>
+                <p className="muted">{qrStatus === "verifying" ? "Please wait while we securely verify the code and record your attendance." : qrStatus === "success" ? qrMessage : qrStatus === "error" ? qrMessage : "Scan the official QR code displayed at your fellowship meeting."}</p>
               </div>
-              <button
-                type="button"
-                className="text-button"
-                aria-label="Close QR scanner"
-                onClick={() => setScannerOpen(false)}
-              >
-                ✕
-              </button>
+              {qrStatus !== "verifying" && (
+                <button type="button" className="text-button" aria-label="Close QR scanner" onClick={() => setScannerOpen(false)}>✕</button>
+              )}
             </div>
-            {!scannedValue && <div id="fgbmfi-qr-reader" style={{ width: "100%", margin: "16px 0" }} />}
-            {scannerError && <ErrorNote text={`${scannerError} Camera access requires permission and a secure HTTPS connection.`} />}
-            {scannedValue && (
-              <div className="notice success" role="status">
-                QR code detected. QR-based attendance verification is not connected yet, so scanning alone has not recorded your attendance.
+            {qrStatus === "verifying" ? (
+              <div className="qr-progress-state" role="status" aria-live="polite">
+                <div className="qr-progress-orbit"><span className="qr-progress-core">▦</span></div>
+                <div className="qr-progress-track"><span /></div>
+                <strong>{qrMessage}</strong>
+                <span className="muted">This usually takes just a moment.</span>
               </div>
+            ) : qrStatus === "error" ? (
+              <div className="qr-result-state qr-error-state" role="alert">
+                <div className="qr-result-icon"><span>!</span></div>
+                <strong>{/invalid_qr_code|official.*qr|not recognised|not recognized/i.test(qrMessage) ? "QR code not recognised" : "Check-in couldn't be completed"}</strong>
+                <p>{qrMessage || "Please scan the official FGBMFI Connect QR code and try again."}</p>
+              </div>
+            ) : qrStatus === "success" ? (
+              <div className="qr-result-state qr-success-state" role="status">
+                <div className="qr-result-icon"><span>✓</span></div>
+                <strong>Attendance confirmed</strong>
+                <p>{qrMessage}</p>
+              </div>
+            ) : (
+              <>
+                <div id="fgbmfi-qr-reader" style={{ width: "100%", margin: "16px 0" }} />
+                {scannerError && <ErrorNote text={`${scannerError} Camera access requires permission and a secure HTTPS connection.`} />}
+              </>
             )}
             <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-              {scannedValue && (
-                <button
-                  className="button primary full"
-                  onClick={() => {
-                    setScannerOpen(false);
-                    go("check-in");
-                  }}
-                >
-                  Continue to attendance check-in
-                </button>
+              {qrStatus === "error" && (
+                <button className="button primary full" onClick={() => {
+                  setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage(""); qrRequestInFlight.current = false;
+                  setScannerOpen(false); window.setTimeout(() => setScannerOpen(true), 100);
+                }}>Scan again</button>
               )}
-              {scannerError && !scannedValue && (
-                <button
-                  className="button secondary full"
-                  onClick={() => {
-                    setScannerError("");
-                    setScannedValue("");
-                    setScannerOpen(false);
-                    window.setTimeout(() => setScannerOpen(true), 100);
-                  }}
-                >
-                  Try camera again
-                </button>
+              {scannerError && qrStatus === "idle" && (
+                <button className="button secondary full" onClick={() => {
+                  setScannerError(""); setScannedValue(""); qrRequestInFlight.current = false;
+                  setScannerOpen(false); window.setTimeout(() => setScannerOpen(true), 100);
+                }}>Try camera again</button>
               )}
-              <button className="button secondary full" onClick={() => setScannerOpen(false)}>
-                Skip for now
-              </button>
+              {qrStatus !== "verifying" && <button className="button secondary full" onClick={() => setScannerOpen(false)}>{qrStatus === "success" ? "Close" : "Cancel"}</button>}
             </div>
           </section>
         </div>
@@ -848,9 +890,16 @@ export default function AppPage() {
                   </div>
                   <button
                     className="button primary full"
-                    onClick={() => go("check-in")}
+                    onClick={() => {
+                      setScannerError("");
+                      setScannedValue("");
+                      setQrStatus("idle");
+                      setQrMessage("");
+                      qrRequestInFlight.current = false;
+                      setScannerOpen(true);
+                    }}
                   >
-                    ◎ Check in to fellowship
+                    <span aria-hidden="true">▦</span> Scan QR to Check In
                   </button>
                 </section>
                 <section className="card scripture-card">
@@ -926,7 +975,7 @@ export default function AppPage() {
                   </h1>
                   <p className="muted">
                     {checkSession?.check_in_open
-                      ? "When you're at the fellowship, confirm your attendance below."
+                      ? "Scan the official fellowship QR code to confirm your attendance."
                       : "Check-in opens during the scheduled fellowship meeting."}
                   </p>
                   {checkSession?.meeting && (
@@ -941,15 +990,14 @@ export default function AppPage() {
                   )}
                   <button
                     className="button primary full"
-                    onClick={checkIn}
-                    disabled={busy || !checkSession?.check_in_open}
+                    onClick={() => {
+                      setScannerError(""); setScannedValue(""); setQrStatus("idle"); setQrMessage("");
+                      qrRequestInFlight.current = false; setScannerOpen(true);
+                    }}
                   >
-                    {busy ? "Checking you in…" : "Confirm check-in"}
+                    Scan QR to Check In
                   </button>
-                  <p className="fineprint">
-                    This version confirms attendance through the API. QR-code
-                    scanning is not available in the current backend.
-                  </p>
+                  <p className="fineprint">Check-in is completed only after the official fellowship QR code is verified.</p>
                 </div>
               </section>
             )}

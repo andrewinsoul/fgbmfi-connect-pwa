@@ -69,7 +69,8 @@ async function proxy(
       });
     }
     return response;
-  } catch {
+  } catch(e) {
+    console.log("NNN >>>> ", e);
     return NextResponse.json(
       {
         error: {

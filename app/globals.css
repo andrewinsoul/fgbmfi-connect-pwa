@@ -1169,3 +1169,112 @@ select,
 button {
   font: inherit;
 }
+
+/* QR attendance verification states */
+.qr-progress-state,
+.qr-result-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  padding: 30px 18px 22px;
+}
+.qr-progress-orbit {
+  width: 112px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle, #f5f0ff 0 48%, #eee5ff 49% 100%);
+}
+.qr-progress-orbit::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 3px solid transparent;
+  border-top-color: var(--violet);
+  border-right-color: #b99be9;
+  animation: qr-orbit 1.15s linear infinite;
+}
+.qr-progress-orbit::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed #cdb8f2;
+  border-radius: inherit;
+  animation: qr-orbit 8s linear infinite reverse;
+}
+.qr-progress-core {
+  color: var(--violet);
+  font-size: 43px;
+  line-height: 1;
+  z-index: 1;
+  animation: qr-pulse 1.5s ease-in-out infinite;
+}
+.qr-progress-track {
+  width: min(100%, 250px);
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eee7f8;
+}
+.qr-progress-track span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8d66d4, var(--violet), #d3b45b);
+  animation: qr-progress 1.35s ease-in-out infinite;
+}
+.qr-result-icon {
+  width: 82px;
+  height: 82px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 34px;
+  font-weight: 800;
+}
+.qr-result-icon span {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+}
+.qr-error-state .qr-result-icon {
+  color: #a62f48;
+  background: #fff0f2;
+  box-shadow: 0 0 0 9px #fff7f8;
+}
+.qr-error-state .qr-result-icon span {
+  border: 2px solid #d96a7e;
+}
+.qr-success-state .qr-result-icon {
+  color: #18714e;
+  background: #eaf8f0;
+  box-shadow: 0 0 0 9px #f4fbf7;
+}
+.qr-success-state .qr-result-icon span {
+  border: 2px solid #72c39d;
+}
+.qr-result-state strong,
+.qr-progress-state strong {
+  font-size: 1rem;
+}
+.qr-result-state p {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.55;
+}
+@keyframes qr-orbit { to { transform: rotate(360deg); } }
+@keyframes qr-pulse { 50% { transform: scale(1.08); opacity: .78; } }
+@keyframes qr-progress { from { transform: translateX(-110%); } to { transform: translateX(360%); } }
+@media (prefers-reduced-motion: reduce) {
+  .qr-progress-orbit::before, .qr-progress-orbit::after, .qr-progress-core, .qr-progress-track span { animation-duration: 8s; }
+}
